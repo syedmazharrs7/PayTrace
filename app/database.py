@@ -82,6 +82,38 @@ def init_db():
                 UNIQUE(event_id, incident_type)
             )
         """)
+
+        # 4. incident_analyses
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS incident_analyses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                incident_id INTEGER UNIQUE NOT NULL,
+                summary TEXT NOT NULL,
+                what_happened TEXT NOT NULL,
+                likely_cause TEXT NOT NULL,
+                impact TEXT NOT NULL,
+                recommended_action TEXT NOT NULL,
+                action_type TEXT NOT NULL,
+                action_safety TEXT NOT NULL,
+                confidence TEXT NOT NULL,
+                uncertainty TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(incident_id) REFERENCES incidents(id)
+            )
+        """)
+
+        # 5. audit_trail
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS audit_trail (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                incident_id INTEGER NOT NULL,
+                action TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                safety_classification TEXT NOT NULL,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(incident_id) REFERENCES incidents(id)
+            )
+        """)
         
         conn.commit()
 
@@ -93,6 +125,9 @@ def get_db():
     conn.row_factory = sqlite3.Row
     try:
         yield conn
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 

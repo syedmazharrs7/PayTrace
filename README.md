@@ -51,3 +51,52 @@ PayTrace features bidirectional correlation to accurately detect PAYMENT_STATE_M
 
 ### Why event arrival order doesn't matter
 In distributed systems with asynchronous webhooks, network delays or retries can cause webhooks to arrive before the local database commits the initial order. Bidirectional correlation ensures we never miss a mismatch simply because Razorpay was faster than the merchant's application infrastructure. Idempotency guarantees (`UNIQUE(event_id, incident_type)`) ensure duplicate webhooks or repeated updates do not spawn false duplicate incidents.
+
+## Incident Intelligence (Milestone 4)
+PayTrace features an advanced incident intelligence layer that uses AI to analyze mismatches while maintaining strict deterministic safety boundaries.
+
+### Facts vs Inferences
+The system enforces a strict distinction:
+- **Facts:** Razorpay order ID, payment statuses, webhook IDs, timestamps, and deterministic calculated impact.
+- **Inferences:** AI-generated summary, likely cause, what happened, and recommended action.
+
+### Evidence Builder
+Before AI analysis, PayTrace constructs a deterministic, sanitized evidence package. 
+**Data Minimization:** It explicitly strips out all customer PII, contact info, email addresses, and raw webhook payloads. The AI only sees the minimum structured facts required to understand the state mismatch.
+
+### Deterministic Impact Calculation
+The AI does NOT decide how much money was lost. PayTrace application logic calculates the financial impact (e.g., amount at risk) based purely on verified database records.
+
+### Structured Action Types & Deterministic Safety Engine
+The AI classifies its recommendation into a structured `action_type` (e.g., `INVESTIGATE`, `RECONCILE`, `REFUND`). 
+Crucially, **AI recommendation ≠ authorization**. 
+A deterministic Safety Engine maps these types to rigid boundaries:
+- `INVESTIGATE` → `INFORMATIONAL`
+- `RECONCILE` / `CANCEL` → `REQUIRES_HUMAN_APPROVAL`
+- `REFUND` / `CAPTURE` / `TRANSFER` / `UNKNOWN` → `BLOCKED`
+
+### Audit Trail
+Every analysis automatically generates an immutable audit trail record indicating the AI's recommendation and the Safety Engine's final classification.
+
+### API Usage
+Generate or retrieve an analysis for an incident:
+- `POST /api/incidents/{incident_id}/analysis`: Idempotently builds evidence, calls the AI provider, runs the safety engine, stores the result, and returns it.
+- `GET /api/incidents/{incident_id}/analysis`: Retrieves the existing analysis (read-only). Returns 404 if not found.
+
+### AI Provider Configuration
+The provider is configurable via environment variables in `.env`:
+```env
+# Optional: Set testing mode to bypass AI completely (uses MockProvider)
+PAYTRACE_ENV=development 
+
+# For production, supply your AI credentials (Gemini is the default provider):
+AI_API_KEY=your_gemini_api_key_here
+AI_MODEL=gemini-3.6-flash
+```
+If credentials are missing in production, the system fails gracefully with a 503 error and refuses to fabricate analysis.
+
+### Running Tests
+To run the complete 22-test suite covering both bidirectional correlation (M3) and incident intelligence (M4):
+```bash
+python -m pytest
+```
