@@ -33,7 +33,7 @@ from app.services.investigator import get_ai_provider, AIProvider
 from app.services.evidence import build_evidence
 from app.services.safety import enforce_safety
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 import sqlite3
 
 from app.schemas import IncidentAnalysisResponse
@@ -74,7 +74,7 @@ async def generate_incident_analysis(incident_id: int, provider: AIProvider = De
         raise HTTPException(status_code=404, detail=str(e))
         
     incident = evidence["incident"]
-    generated_at = datetime.utcnow().isoformat()
+    generated_at = datetime.now(timezone.utc).isoformat()
     
     # 3. AI Analysis
     ai_output = provider.analyze(evidence)
@@ -124,3 +124,44 @@ async def generate_incident_analysis(incident_id: int, provider: AIProvider = De
             # Race condition, already inserted
             cursor.execute("SELECT * FROM incident_analyses WHERE incident_id = ?", (incident_id,))
             return dict(cursor.fetchone())
+
+@router.post("/{incident_id}/resolve")
+async def resolve_incident(incident_id: int):
+    """Resolves an open incident and records it in the audit trail."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        
+        # 1. Verify incident exists and check status
+        cursor.execute("SELECT status FROM incidents WHERE id = ?", (incident_id,))
+        incident_row = cursor.fetchone()
+        
+        if not incident_row:
+            raise HTTPException(status_code=404, detail="Incident not found.")
+            
+        current_status = incident_row["status"]
+        if current_status != "OPEN":
+            raise HTTPException(status_code=400, detail=f"Cannot resolve incident with status: {current_status}")
+            
+        # 2. Update status to RESOLVED
+        resolved_at = datetime.now(timezone.utc).isoformat()
+        cursor.execute(
+            "UPDATE incidents SET status = 'RESOLVED', resolved_at = ? WHERE id = ?",
+            (resolved_at, incident_id)
+        )
+        
+        # 3. Add audit trail entry
+        cursor.execute("""
+            INSERT INTO audit_trail (
+                incident_id, action, reason, safety_classification, timestamp
+            ) VALUES (?, ?, ?, ?, ?)
+        """, (
+            incident_id,
+            "RESOLVE_INCIDENT",
+            "Human requested incident resolution",
+            "INFORMATIONAL",
+            resolved_at
+        ))
+        
+        conn.commit()
+        
+        return {"status": "success", "detail": "Incident resolved."}

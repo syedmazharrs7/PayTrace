@@ -1,11 +1,14 @@
 import json
 import os
 import httpx
+import logging
 from datetime import datetime
 from abc import ABC, abstractmethod
 from fastapi import HTTPException
 from pydantic import ValidationError
 from app.schemas import AIOutput
+
+logger = logging.getLogger(__name__)
 
 class AIProvider(ABC):
     @abstractmethod
@@ -76,32 +79,45 @@ class GeminiProvider(AIProvider):
             }
         }
 
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent?key={self.api_key}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
+        headers = {"x-goog-api-key": self.api_key}
 
         try:
             with httpx.Client(timeout=30.0) as client:
-                response = client.post(url, json=payload)
+                response = client.post(url, json=payload, headers=headers)
                 response.raise_for_status()
                 data = response.json()
                 
                 try:
                     content = data["candidates"][0]["content"]["parts"][0]["text"]
                 except (KeyError, IndexError):
-                    raise HTTPException(status_code=502, detail="AI returned malformed response structure.")
+                    logger.error("AI provider returned a response missing expected content structure.")
+                    raise HTTPException(status_code=502, detail="AI analysis returned an unexpected response structure.")
                 
                 # Parse and validate with Pydantic
                 parsed_json = json.loads(content)
                 return AIOutput(**parsed_json)
                 
+        except httpx.TimeoutException:
+            logger.error("AI provider request timed out.")
+            raise HTTPException(status_code=504, detail="AI analysis service timed out. Please try again later.")
         except httpx.RequestError as exc:
-            raise HTTPException(status_code=502, detail=f"AI provider network error: {exc}")
+            logger.error(f"AI provider network error: {type(exc).__name__}")
+            raise HTTPException(status_code=502, detail="AI analysis service is temporarily unreachable.")
         except httpx.HTTPStatusError as exc:
-            sanitized_url = str(exc.request.url).replace(self.api_key, "REDACTED_API_KEY") if self.api_key else str(exc.request.url)
-            print(f"Gemini API Error (HTTP {exc.response.status_code}) on {exc.request.method} {sanitized_url}")
-            print(f"Gemini Error Response Body: {exc.response.text}")
-            raise HTTPException(status_code=502, detail=f"AI provider returned an error: {exc.response.status_code}")
+            status = exc.response.status_code
+            logger.error(f"AI provider returned HTTP {status}")
+            
+            if status == 429:
+                raise HTTPException(status_code=429, detail="AI analysis service is rate limited. Please try again later.")
+            elif status in [400, 401, 403, 404]:
+                raise HTTPException(status_code=500, detail="AI analysis service is misconfigured or unavailable.")
+            else:
+                raise HTTPException(status_code=502, detail="AI analysis service is temporarily unavailable.")
+                
         except (json.JSONDecodeError, ValidationError) as exc:
-            raise HTTPException(status_code=502, detail="AI returned malformed or invalid response.")
+            logger.error(f"AI returned malformed or invalid JSON: {type(exc).__name__}")
+            raise HTTPException(status_code=502, detail="AI analysis returned invalid structured data.")
 
 class MockAIProvider(AIProvider):
     def analyze(self, evidence: dict) -> AIOutput:

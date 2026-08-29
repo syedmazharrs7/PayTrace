@@ -32,31 +32,36 @@ async def razorpay_webhook(request: Request):
     # 1. Receive the raw HTTP request body.
     raw_body = await request.body()
     
-    # 2 & 3. Read the headers.
+    # 2 & 3. Read the signature header.
     signature = request.headers.get("X-Razorpay-Signature")
-    event_id = request.headers.get("x-razorpay-event-id")
     
     if not signature:
         logger.warning("Missing X-Razorpay-Signature header")
         return JSONResponse(status_code=400, content={"detail": "Missing signature"})
         
-    if not event_id:
-        logger.warning("Missing x-razorpay-event-id header")
-
-    # 4 & 5. Verify the webhook signature.
+    # 4 & 5. Verify the webhook signature against the raw body.
     is_valid = verify_signature(raw_body, signature, config.RAZORPAY_WEBHOOK_SECRET)
     if not is_valid:
         logger.error("Invalid Razorpay webhook signature")
         return JSONResponse(status_code=400, content={"detail": "Invalid signature"})
 
-    # 6. Parse the JSON only AFTER signature verification.
+    # 6 & 7. Read the event ID ONLY AFTER signature verification.
+    event_id = request.headers.get("x-razorpay-event-id")
+    if not event_id:
+        logger.warning("Missing x-razorpay-event-id header")
+        return JSONResponse(status_code=400, content={"detail": "Missing event ID"})
+
+    # 8. Parse the JSON only AFTER all required authentication and headers.
     try:
         payload = json.loads(raw_body)
     except json.JSONDecodeError:
         logger.error("Invalid JSON payload in webhook")
         return JSONResponse(status_code=400, content={"detail": "Invalid JSON"})
 
-    # 7 & 8. Extract the top-level Razorpay event name and created_at.
+    # Extract the top-level Razorpay event name and created_at.
+    if not isinstance(payload, dict):
+        return JSONResponse(status_code=400, content={"detail": "Malformed JSON structure"})
+        
     event_type = payload.get("event")
     created_at = payload.get("created_at")
     
@@ -113,7 +118,10 @@ async def razorpay_webhook(request: Request):
     # 12. Correlate Payment State
     if event_type == "payment.captured":
         try:
-            payment_data = payload["payload"]["payment"]["entity"]
+            payment_data = payload.get("payload", {}).get("payment", {}).get("entity", {})
+            if not payment_data:
+                raise KeyError("Missing payment entity")
+                
             razorpay_payment_id = payment_data["id"]
             razorpay_order_id = payment_data["order_id"]
             amount = payment_data["amount"]
@@ -148,6 +156,10 @@ async def razorpay_webhook(request: Request):
                             pass
         except KeyError as e:
             logger.warning(f"Malformed payment payload, missing key: {e}")
+            return JSONResponse(status_code=400, content={"detail": "Malformed payment payload"})
+        except TypeError:
+            logger.warning("Malformed payment payload structure")
+            return JSONResponse(status_code=400, content={"detail": "Malformed payment structure"})
 
     # 13. Return HTTP 200 for valid events.
     return JSONResponse(status_code=200, content={"status": "ok"})

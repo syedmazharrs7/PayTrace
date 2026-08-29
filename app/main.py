@@ -19,8 +19,8 @@ init_db()
 
 app = FastAPI(
     title="PayTrace API",
-    description="Backend Milestone 3: Payment-State Correlation",
-    version="1.2.0"
+    description="Backend Milestone 5: Production-Grade Incident Intelligence",
+    version="1.5.0"
 )
 
 # Include routes
