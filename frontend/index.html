@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PayTrace Operations</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+    <!-- Sidebar Navigation -->
+    <nav id="sidebar">
+        <div class="sidebar-header">
+            PayTrace
+            <strong>OPERATIONS</strong>
+        </div>
+        
+        <div class="sidebar-nav">
+            <div class="nav-section">
+                <a href="#/" class="nav-item active" data-nav="dashboard">Overview</a>
+                <a href="#/incidents" class="nav-item" data-nav="incidents">Incidents</a>
+                <a href="#/explorer" class="nav-item" data-nav="explorer">Order Explorer</a>
+            </div>
+            
+            <div class="nav-section">
+                <div class="nav-label">SYSTEM</div>
+                <a href="#/checkout" class="nav-item" data-nav="checkout">Test Checkout</a>
+                <a href="#/health" class="nav-item" data-nav="health">Health</a>
+            </div>
+        </div>
+        
+        <div class="sidebar-footer">
+            <div class="api-status">
+                <div id="global-status-dot" class="status-dot-global"></div>
+                API <span id="global-status-text">Checking...</span>
+            </div>
+            <div class="env-label">LOCAL ENVIRONMENT</div>
+        </div>
+    </nav>
+
+    <!-- Main Content Area -->
+    <main id="main-content">
+        <div class="top-bar">
+            <div id="top-context" class="top-bar-title">Overview</div>
+        </div>
+        
+        <!-- Views will be injected here by app.js -->
+        <div id="view-container"></div>
+    </main>
+
+    <!-- Scripts -->
+    <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+    <script src="js/api.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>

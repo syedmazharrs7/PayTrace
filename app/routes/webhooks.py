@@ -86,6 +86,9 @@ async def razorpay_webhook(request: Request):
             order_entity = payload["payload"]["order"]["entity"]
             entity_id = order_entity.get("id")
             razorpay_order_id = order_entity.get("id")
+            amount = order_entity.get("amount")
+            currency = order_entity.get("currency")
+            payment_status = order_entity.get("status")
     except KeyError:
         logger.warning(f"Could not extract entity ID from payload for event_type={event_type}")
 

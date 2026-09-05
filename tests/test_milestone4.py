@@ -1,4 +1,5 @@
 import pytest
+from unittest.mock import patch, AsyncMock
 import os
 import sqlite3
 from fastapi.testclient import TestClient
@@ -56,7 +57,7 @@ def test_deterministic_impact():
     # 3. Deterministic impact calculation.
     evidence = build_evidence(1)
     impact = evidence["deterministic_impact"]
-    assert "1000 INR payment is captured" in impact
+    assert "10.00 INR payment is captured" in impact
     assert "merchant order remains PENDING" in impact
 
 def test_valid_mock_ai_provider():

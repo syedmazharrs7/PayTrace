@@ -36,7 +36,23 @@ import json
 from datetime import datetime, timezone
 import sqlite3
 
-from app.schemas import IncidentAnalysisResponse
+from app.schemas import IncidentAnalysisResponse, AuditTrailResponse
+
+@router.get("/{incident_id}/audit", response_model=list[AuditTrailResponse])
+async def get_incident_audit(incident_id: int):
+    """Read-only. Returns the audit trail for a specific incident."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        
+        # Verify incident exists first
+        cursor.execute("SELECT id FROM incidents WHERE id = ?", (incident_id,))
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail="Incident not found")
+            
+        cursor.execute("SELECT * FROM audit_trail WHERE incident_id = ? ORDER BY timestamp ASC", (incident_id,))
+        audit_rows = cursor.fetchall()
+        
+        return [dict(row) for row in audit_rows]
 
 @router.get("/{incident_id}/analysis", response_model=IncidentAnalysisResponse)
 async def get_incident_analysis(incident_id: int):
@@ -132,24 +148,58 @@ async def resolve_incident(incident_id: int):
         cursor = conn.cursor()
         
         # 1. Verify incident exists and check status
-        cursor.execute("SELECT status FROM incidents WHERE id = ?", (incident_id,))
+        cursor.execute("SELECT * FROM incidents WHERE id = ?", (incident_id,))
         incident_row = cursor.fetchone()
         
         if not incident_row:
             raise HTTPException(status_code=404, detail="Incident not found.")
             
-        current_status = incident_row["status"]
+        incident = dict(incident_row)
+        current_status = incident["status"]
         if current_status != "OPEN":
             raise HTTPException(status_code=400, detail=f"Cannot resolve incident with status: {current_status}")
+
+        # Active Reconciliation for PAYMENT_STATE_MISMATCH
+        reconciled = False
+        if incident["incident_type"] == "PAYMENT_STATE_MISMATCH" and incident.get("razorpay_status") in ["captured", "paid"]:
+            # Verify affected merchant order exists
+            cursor.execute("SELECT * FROM merchant_orders WHERE razorpay_order_id = ?", (incident["razorpay_order_id"],))
+            order_row = cursor.fetchone()
             
-        # 2. Update status to RESOLVED
+            if not order_row:
+                raise HTTPException(status_code=404, detail="Affected merchant order not found.")
+            
+            merchant_order = dict(order_row)
+            if merchant_order["status"] == "PENDING":
+                # Reconcile local state
+                cursor.execute(
+                    "UPDATE merchant_orders SET status = 'PAID', updated_at = CURRENT_TIMESTAMP WHERE razorpay_order_id = ?",
+                    (incident["razorpay_order_id"],)
+                )
+                reconciled = True
+            
         resolved_at = datetime.now(timezone.utc).isoformat()
+        
+        # 2. Update status to RESOLVED
         cursor.execute(
             "UPDATE incidents SET status = 'RESOLVED', resolved_at = ? WHERE id = ?",
             (resolved_at, incident_id)
         )
         
-        # 3. Add audit trail entry
+        # 3. Add audit trail entries
+        if reconciled:
+            cursor.execute("""
+                INSERT INTO audit_trail (
+                    incident_id, action, reason, safety_classification, timestamp
+                ) VALUES (?, ?, ?, ?, ?)
+            """, (
+                incident_id,
+                "STATE_RECONCILED",
+                f"Merchant order {incident['razorpay_order_id']} state actively reconciled to PAID",
+                "INFORMATIONAL",
+                resolved_at
+            ))
+
         cursor.execute("""
             INSERT INTO audit_trail (
                 incident_id, action, reason, safety_classification, timestamp
@@ -164,4 +214,4 @@ async def resolve_incident(incident_id: int):
         
         conn.commit()
         
-        return {"status": "success", "detail": "Incident resolved."}
+        return {"status": "success", "detail": "Incident resolved.", "reconciled": reconciled}

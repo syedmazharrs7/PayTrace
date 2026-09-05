@@ -36,7 +36,8 @@ def build_evidence(incident_id: int) -> dict:
         # 4. Deterministic Impact Calculation
         impact = "No impact calculated."
         if incident["incident_type"] == "PAYMENT_STATE_MISMATCH":
-            impact = f"{incident['amount']} {incident['currency']} payment is {incident['razorpay_status']} while the merchant order remains {incident['merchant_status']}."
+            amount_major = f"{incident['amount'] / 100.0:.2f}" if incident["amount"] is not None else "0.00"
+            impact = f"{amount_major} {incident['currency']} payment is {incident['razorpay_status']} while the merchant order remains {incident['merchant_status']}."
         
         return {
             "incident": {
@@ -46,6 +47,8 @@ def build_evidence(incident_id: int) -> dict:
                 "razorpay_order_id": incident["razorpay_order_id"],
                 "razorpay_payment_id": incident["razorpay_payment_id"],
                 "amount": incident["amount"],
+                "amount_minor": incident["amount"],
+                "amount_major": incident["amount"] / 100.0 if incident["amount"] is not None else None,
                 "currency": incident["currency"],
                 "razorpay_status": incident["razorpay_status"],
                 "merchant_status": incident["merchant_status"],

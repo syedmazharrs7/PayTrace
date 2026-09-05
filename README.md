@@ -1,143 +1,189 @@
-# PayTrace: Incident Intelligence & Reconciliation
+# PayTrace
 
-PayTrace is a payment incident intelligence and reconciliation system built around Razorpay-style payment webhooks. It is designed to deterministically detect state mismatches between a payment gateway and a merchant system, gather evidence, and use an AI as an **advisor** (never an executor) to recommend the next step for human operators.
+PayTrace turns payment-state divergence into an actionable, auditable recovery workflow.
 
----
+It is an **AI-Assisted Payment Operations & Revenue Protection system** built to handle the inevitable edge cases in distributed payment systems. PayTrace detects when payment-provider state and merchant state diverge, reconstructs what happened, and guides a human-controlled recovery.
 
 ## The Problem
 
-Payment gateways and merchant systems can temporarily disagree about a payment's state due to dropped webhooks, network failures, or race conditions. A payment may be captured by the gateway while the merchant order remains pending, creating reconciliation risk, operational uncertainty, and potential financial loss or poor customer experience.
+In a typical e-commerce or SaaS flow, the payment provider (e.g., Razorpay) processes a payment and sends an asynchronous webhook to the merchant's backend. However, network partitions, server crashes, application bugs, or unhandled exceptions can cause the merchant's internal order state to diverge from the payment provider's state.
 
-## The Solution
+Consider this scenario:
+* **Razorpay:** `PAYMENT = CAPTURED`
+* **Merchant:** `ORDER = PENDING`
 
-PayTrace solves this by treating payment anomalies as **Incidents**. 
-Instead of trusting the AI to perform high-stakes financial operations, PayTrace uses deterministic logic to identify facts, bounds the AI with a strict safety layer, and focuses the LLM purely on root-cause investigation and human-readable summarization.
+Ordinary webhook monitoring simply logs that an event was received. PayTrace actively compares the authoritative truth (the payment provider) against the local truth (the merchant database), detects the divergence, and provides a structured, bounded recovery workflow.
 
-### Why AI?
-AI is used for investigation and explanation, not payment execution. Deterministic code establishes the facts and safety boundaries, while Gemini helps summarize evidence, identify plausible causes, and recommend the next investigation step.
+## The PayTrace Loop
 
-### Why NOT an AI Agent?
-PayTrace intentionally does NOT allow an autonomous agent to refund, capture, transfer, or cancel payments. These actions have direct financial consequences and require deterministic guardrails and human oversight.
+PayTrace operates through a strict, deterministic workflow enhanced by AI for investigation:
 
----
+1. **DETECT:** PayTrace ingests real Razorpay webhooks (e.g., `payment.captured`), securely verifies their HMAC-SHA256 signatures, and compares the reported payment status against the merchant's order state.
+2. **UNDERSTAND:** If a mismatch is detected, PayTrace creates a `PAYMENT_STATE_MISMATCH` incident, reconstructing the chronological event lifecycle from the event ledger.
+3. **RECOMMEND:** An AI model (Google Gemini) analyzes the timeline, identifies the likely root cause, assesses the impact, and recommends a specific recovery action.
+4. **HUMAN APPROVAL:** *AI advises. The system verifies. Humans authorize.* Consequential state changes (like marking an order as PAID) require explicit human approval.
+5. **RECONCILE:** Once approved, the merchant order state is updated through deterministic, pre-approved application logic.
+6. **AUDIT:** Every detection, AI recommendation, and human authorization is persisted in a durable audit trail.
 
 ## Architecture
 
-```mermaid
-flowchart TD
-    R[Razorpay Webhook] --> W[Webhook Handler]
-    W --> V[Signature Verification]
-    V --> C[Correlation Engine]
-    C --> I[Incident Detection]
-    I --> E[Evidence Builder]
-    E --> G[Gemini Investigator]
-    G --> P[Pydantic Validation]
-    P --> S[Deterministic Safety Gate]
-    S --> A[Analysis + Audit Trail]
-    A --> H[Human Decision / Resolution]
+```text
+       Razorpay (Test Mode)
+       ├── REST API
+       └── Webhooks
+              ↓
+      PayTrace Ingestion (FastAPI)
+              ↓
+         Event Ledger (SQLite)
+              ↓
+      Reconciliation Engine
+              ↓
+        Incident Detection
+              ↓
+        AI Investigation (Gemini)
+              ↓
+       Deterministic Safety
+              ↓
+    Human Approval (Operations Console)
+              ↓
+         Reconciliation
+              ↓
+         Audit Trail
+              ↓
+        Merchant State
 ```
 
-## Core Workflow
+## Where AI is Used (and Where it is Not)
 
-1. **Webhook Ingestion**: Razorpay webhooks are received and cryptographically verified.
-2. **Idempotency Check**: Duplicate webhooks are ignored securely.
-3. **Incident Detection**: PayTrace correlates the webhook with the internal merchant database. If a mismatch is detected (e.g., Gateway is CAPTURED, Merchant is PENDING), an Incident is created.
-4. **Evidence Generation**: A sanitized, deterministic evidence package is built.
-5. **AI Investigation**: Gemini analyzes the evidence to infer the likely cause and recommend an action.
-6. **Deterministic Safety Gate**: The system overrides the AI if it attempts a financially sensitive action, mapping it to strict safety boundaries.
-7. **Human Resolution**: Operators review the audit trail, take action, and resolve the incident.
+**AI is used for:**
+* Summarizing incidents into readable operational reports.
+* Interpreting webhook timelines (e.g., failed → authorized → captured).
+* Determining the likely cause of divergence.
+* Recommending bounded recovery actions.
 
----
+**Deterministic logic handles:**
+* Webhook HMAC signature verification.
+* Idempotency checks.
+* Event persistence.
+* State comparison and anomaly detection.
+* Financial state transitions (reconciliation).
+* Audit logging.
 
-## Features & Resilience
+PayTrace intentionally **does not** use AI to execute autonomous financial transactions or directly mutate the database. AI acts purely as an investigative copilot.
 
-### Deterministic Safety Gate
-The AI's recommendations are strictly gated:
-- `INVESTIGATE` → **INFORMATIONAL**
-- `RECONCILE` / `CANCEL` → **REQUIRES_HUMAN_APPROVAL**
-- `REFUND` / `CAPTURE` / `TRANSFER` / `UNKNOWN` → **BLOCKED**
+## Security & Data Integrity
 
-### Failure Handling
-| Failure | Behavior |
-| :--- | :--- |
-| **Invalid Webhook Signature** | Safely rejected (HTTP 400). |
-| **Duplicate Webhook** | Idempotently ignored. State remains uncorrupted. |
-| **Missing Incident** | Standard HTTP 404 response. |
-| **Gemini Unavailable / Timeout** | Graceful application failure. No fake analysis is created. |
-| **Gemini Malformed Output** | Rejected deterministically. No corrupt data persisted. |
-| **Unsafe AI Action** | Deterministically blocked by the safety gate. |
-| **Database Exception** | Transaction rollback. No partial states. |
+PayTrace enforces strict security boundaries:
+* **Webhook Verification:** All webhooks are authenticated using `X-Razorpay-Signature` against a strict HMAC-SHA256 hash of the raw payload.
+* **Idempotency:** Webhook ingestion is idempotent, driven by `x-razorpay-event-id` database constraints to prevent duplicate processing.
+* **Safe Payload Handling:** To protect PII and reduce surface area, PayTrace extracts only necessary correlation IDs and metadata. Raw sensitive payloads are not blindly persisted.
+* **Separation of Concerns:** The application cleanly separates the Razorpay public Key ID from the highly sensitive Secret Key.
 
-### Audit Trail
-Every major lifecycle event (Creation, AI Analysis, Resolution) is appended to an immutable audit trail, providing full observability into *what* happened and *why*.
+## Real Razorpay Test Mode Demo
 
-### Security Principles
-- **Data Minimization**: Only essential metadata is parsed and stored.
-- **Secret Isolation**: Credentials (API Keys, Webhook Secrets) are strictly environment variables.
-- **Fail-Safe**: If any internal service fails, it fails closed, refusing to act on partial information.
+The application/demo uses genuine Razorpay Test Mode transactions and webhook events. Synthetic fixtures are restricted to the isolated automated test database.
 
----
+### The Lifecycle
+1. PayTrace creates a Razorpay Test Mode order via the REST API.
+2. The user completes the payment via the standard Razorpay Checkout.
+3. Razorpay delivers real webhooks (e.g., `payment.authorized`, `payment.captured`, `order.paid`).
+4. PayTrace verifies, persists, and correlates these events.
+5. If the merchant order state remains `PENDING` despite a `payment.captured` event, an incident is triggered.
 
-## Setup & Execution
+*Note: PayTrace strictly uses Razorpay Test Mode. No Live Mode funds are processed.*
 
-### Prerequisites
-- Python 3.10+
-- Razorpay Account (Test Mode)
-- Google Gemini API Key
+## Setup & Running Locally
 
-### Environment Variables
-Copy `.env.example` to `.env`:
+### 1. Clone the repository
 ```bash
-cp .env.example .env
-```
-Populate `.env` with your credentials:
-```
-RAZORPAY_KEY_ID=your_razorpay_key_id
-RAZORPAY_KEY_SECRET=your_razorpay_secret
-RAZORPAY_WEBHOOK_SECRET=your_webhook_secret
-AI_API_KEY=your_gemini_api_key
-AI_MODEL=gemini-1.5-flash
+git clone https://github.com/syedmazharrs7/PayTrace.git
+cd PayTrace
 ```
 
-### Running Locally
-1. Create and activate a virtual environment:
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-3. Start the server:
-   ```bash
-   fastapi dev app/main.py
-   ```
-The API documentation will be available at `http://127.0.0.1:8000/docs`.
-
-### Running Tests
-Run the complete test suite (includes End-to-End integration tests):
+### 2. Create a Virtual Environment
+**Windows PowerShell:**
+```powershell
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+```
+**macOS/Linux:**
 ```bash
-python -m pytest
+python3 -m venv venv
+source venv/bin/activate
 ```
 
----
+### 3. Install Requirements
+```bash
+pip install -r requirements.txt
+```
 
-## Demo Walkthrough
+### 4. Environment Configuration
+Create a `.env` file based on `.env.example`:
+```
+RAZORPAY_KEY_ID=rzp_test_...        # Public Key
+RAZORPAY_KEY_SECRET=...             # Secret Key
+RAZORPAY_WEBHOOK_SECRET=...         # Secret Webhook Signature Key
+GEMINI_API_KEY=...                  # Secret API Key
+PAYTRACE_DB_PATH=paytrace.db
+```
 
-To experience the system end-to-end:
+### 5. Start the Server
+```bash
+python -m uvicorn app.main:app --reload
+```
+* **API URL:** `http://127.0.0.1:8000`
+* **Operations Console:** `http://127.0.0.1:8000/console/`
 
-1. **Start the server**.
-2. **Trigger Demo Mismatch**: Send a `POST` to `/api/demo/trigger-mismatch`. This simulates a Razorpay webhook for an order that the merchant thinks is still pending.
-3. **List Incidents**: Send a `GET` to `/api/incidents`. Notice the new incident created.
-4. **Generate Analysis**: Send a `POST` to `/api/incidents/{incident_id}/analysis`. Wait for the AI to investigate.
-5. **Review Analysis**: Inspect the response. Notice the `action_safety` field enforced by the deterministic gate.
-6. **Resolve Incident**: Send a `POST` to `/api/incidents/{incident_id}/resolve` to close the incident and append to the audit trail.
+## Webhook Local Testing
 
----
+To receive real Razorpay webhooks locally, you must expose your local FastAPI server to the internet using a tool like `zrok2` or `ngrok`.
 
-## Design Tradeoffs & Future Improvements
+```bash
+zrok2 share public http://localhost:8000
+```
+Configure your Razorpay Test Mode Webhook Settings to point to your public tunnel:
+`https://<your-zrok-share>/webhooks/razorpay`
 
-- **Database**: SQLite is used for simplicity and portability in this prototype. In a real-world scenario, PostgreSQL would be used to handle high concurrency.
-- **Event Bus**: The current architecture is synchronous. A production system would likely decouple webhook ingestion from processing using a message queue (e.g., Kafka or SQS) for maximum ingestion availability.
-- **Retries**: Gemini API retries are intentionally excluded from this prototype to favor predictable, immediate failure states over silent latency. A production environment would use exponential backoff for 429/50x errors.
+## Automated Testing
+
+PayTrace uses a fully isolated test suite that utilizes an isolated test database (`test_paytrace.db`) to ensure the production/demo database is never polluted by synthetic fixtures.
+
+Run the test suite:
+```bash
+python -m pytest tests/ -q
+```
+**Current Verified Result:**
+`58 passed, 2 warnings in ~40.54s`
+
+## API Documentation
+
+Key endpoints in the PayTrace application:
+
+* `GET /api/merchant/orders` - List all merchant orders.
+* `POST /api/merchant/orders` - Create a real Razorpay Test Mode order.
+* `GET /api/merchant/orders/{razorpay_order_id}/events` - View chronological webhook lifecycle for an order.
+* `POST /webhooks/razorpay` - Secure ingestion endpoint for Razorpay webhooks.
+* `GET /api/incidents` - List all detected payment-state mismatches.
+* `POST /api/incidents/{id}/analysis` - Trigger/retrieve AI investigation for a specific incident.
+* `POST /api/incidents/{id}/resolve` - Apply human-approved reconciliation (updates order to `PAID`).
+
+## Engineering Lessons
+
+Building a robust payment operations tool surfaced several critical realities:
+1. **Amount Unit Representation:** Razorpay processes INR amounts in minor units (paise). A raw payload value of `50000` represents ₹500.00. The AI evidence layer required explicit major/minor formatting to prevent LLM hallucinations about large values.
+2. **Test Database Pollution:** Early test iterations polluted the application DB due to import-time side effects locking the database path. This was successfully mitigated using global pytest environment overrides (`conftest.py`) to guarantee strict test isolation.
+3. **Simulation Endpoints:** To preserve data integrity for the final product, all internal testing simulation endpoints (which mocked local orders) were systematically purged. The final application relies 100% on genuine webhook events.
+
+## Limitations & Non-Goals
+
+PayTrace is an engineering prototype designed for the Razorpay Buildathon. It intentionally **does not** implement:
+* Unrestricted AI financial execution (AI cannot mutate state directly).
+* Fabricated payment data or fake demo generators.
+* Generic analytics or generic dashboarding.
+* Live Mode transactions.
+
+## Conclusion
+
+PayTrace is built around a simple principle: **payment truth and merchant truth should not silently diverge.**
+
+AI investigates. Deterministic controls protect financial state. Humans authorize consequential recovery.

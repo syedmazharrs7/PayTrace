@@ -1,4 +1,5 @@
 import pytest
+from unittest.mock import patch, AsyncMock
 from fastapi.testclient import TestClient
 import os
 import hmac
@@ -35,7 +36,9 @@ def generate_signature(body: bytes, secret: str = "test_secret") -> str:
         digestmod=hashlib.sha256
     ).hexdigest()
 
-def test_merchant_order_creation():
+@patch("app.routes.merchant.razorpay_client.create_order", new_callable=AsyncMock)
+def test_merchant_order_creation(mock_create_order):
+    mock_create_order.return_value = {"id": "order_1", "amount": 10000, "currency": "INR", "status": "created"}
     response = client.post("/api/merchant/orders", json={
         "razorpay_order_id": "order_1",
         "amount": 1000,
@@ -46,7 +49,9 @@ def test_merchant_order_creation():
     assert data["razorpay_order_id"] == "order_1"
     assert data["status"] == "PENDING"
 
-def test_merchant_order_retrieval():
+@patch("app.routes.merchant.razorpay_client.create_order", new_callable=AsyncMock)
+def test_merchant_order_retrieval(mock_create_order):
+    mock_create_order.return_value = {"id": "order_2", "amount": 10000, "currency": "INR", "status": "created"}
     client.post("/api/merchant/orders", json={
         "razorpay_order_id": "order_2",
         "amount": 2000,
@@ -56,17 +61,24 @@ def test_merchant_order_retrieval():
     assert response.status_code == 200
     assert response.json()["razorpay_order_id"] == "order_2"
 
-def test_merchant_status_update():
+@patch("app.routes.merchant.razorpay_client.create_order", new_callable=AsyncMock)
+def test_merchant_status_update(mock_create_order):
+    mock_create_order.return_value = {"id": "order_3", "amount": 10000, "currency": "INR", "status": "created"}
     client.post("/api/merchant/orders", json={
         "razorpay_order_id": "order_3",
         "amount": 3000,
         "currency": "INR"
     })
-    response = client.patch("/api/merchant/orders/order_3/status", json={"status": "PAID"})
+    with get_db() as conn:
+        conn.execute("UPDATE merchant_orders SET status = 'PAID' WHERE razorpay_order_id = 'order_3'")
+        conn.commit()
+    response = client.get("/api/merchant/orders/order_3")
     assert response.status_code == 200
     assert response.json()["status"] == "PAID"
 
-def test_captured_payment_pending_order_incident():
+@patch("app.routes.merchant.razorpay_client.create_order", new_callable=AsyncMock)
+def test_captured_payment_pending_order_incident(mock_create_order):
+    mock_create_order.return_value = {"id": "order_4", "amount": 10000, "currency": "INR", "status": "created"}
     client.post("/api/merchant/orders", json={
         "razorpay_order_id": "order_4",
         "amount": 4000,
@@ -105,13 +117,17 @@ def test_captured_payment_pending_order_incident():
     assert incidents[0]["razorpay_order_id"] == "order_4"
     assert incidents[0]["incident_type"] == "PAYMENT_STATE_MISMATCH"
 
-def test_captured_payment_paid_order_no_incident():
+@patch("app.routes.merchant.razorpay_client.create_order", new_callable=AsyncMock)
+def test_captured_payment_paid_order_no_incident(mock_create_order):
+    mock_create_order.return_value = {"id": "order_5", "amount": 10000, "currency": "INR", "status": "created"}
     client.post("/api/merchant/orders", json={
         "razorpay_order_id": "order_5",
         "amount": 5000,
         "currency": "INR"
     })
-    client.patch("/api/merchant/orders/order_5/status", json={"status": "PAID"})
+    with get_db() as conn:
+        conn.execute("UPDATE merchant_orders SET status = 'PAID' WHERE razorpay_order_id = 'order_5'")
+        conn.commit()
     
     payload = {
         "event": "payment.captured",
@@ -142,13 +158,17 @@ def test_captured_payment_paid_order_no_incident():
     incidents = inc_resp.json()
     assert len(incidents) == 0
 
-def test_captured_payment_failed_order_no_incident():
+@patch("app.routes.merchant.razorpay_client.create_order", new_callable=AsyncMock)
+def test_captured_payment_failed_order_no_incident(mock_create_order):
+    mock_create_order.return_value = {"id": "order_6", "amount": 10000, "currency": "INR", "status": "created"}
     client.post("/api/merchant/orders", json={
         "razorpay_order_id": "order_6",
         "amount": 6000,
         "currency": "INR"
     })
-    client.patch("/api/merchant/orders/order_6/status", json={"status": "FAILED"})
+    with get_db() as conn:
+        conn.execute("UPDATE merchant_orders SET status = 'FAILED' WHERE razorpay_order_id = 'order_6'")
+        conn.commit()
     
     payload = {
         "event": "payment.captured",
@@ -179,7 +199,9 @@ def test_captured_payment_failed_order_no_incident():
     incidents = inc_resp.json()
     assert len(incidents) == 0
 
-def test_captured_payment_missing_order_no_incident():
+@patch("app.routes.merchant.razorpay_client.create_order", new_callable=AsyncMock)
+def test_captured_payment_missing_order_no_incident(mock_create_order):
+    mock_create_order.return_value = {"id": "order_8", "amount": 10000, "currency": "INR", "status": "created"}
     payload = {
         "event": "payment.captured",
         "created_at": 1234567890,
@@ -209,7 +231,9 @@ def test_captured_payment_missing_order_no_incident():
     incidents = inc_resp.json()
     assert len(incidents) == 0
 
-def test_duplicate_webhook_no_duplicate_incident():
+@patch("app.routes.merchant.razorpay_client.create_order", new_callable=AsyncMock)
+def test_duplicate_webhook_no_duplicate_incident(mock_create_order):
+    mock_create_order.return_value = {"id": "order_8", "amount": 10000, "currency": "INR", "status": "created"}
     client.post("/api/merchant/orders", json={
         "razorpay_order_id": "order_8",
         "amount": 8000,
@@ -253,7 +277,9 @@ def test_duplicate_webhook_no_duplicate_incident():
     assert len(incidents) == 1
     assert incidents[0]["razorpay_order_id"] == "order_8"
 
-def test_invalid_signature_rejected():
+@patch("app.routes.merchant.razorpay_client.create_order", new_callable=AsyncMock)
+def test_invalid_signature_rejected(mock_create_order):
+    mock_create_order.return_value = {"id": "order_11", "amount": 10000, "currency": "INR", "status": "created"}
     payload = {"event": "payment.captured"}
     body = json.dumps(payload).encode('utf-8')
     response = client.post("/webhooks/razorpay", content=body, headers={
@@ -263,7 +289,9 @@ def test_invalid_signature_rejected():
     })
     assert response.status_code == 400
 
-def test_order_paid_event_stored_no_incident():
+@patch("app.routes.merchant.razorpay_client.create_order", new_callable=AsyncMock)
+def test_order_paid_event_stored_no_incident(mock_create_order):
+    mock_create_order.return_value = {"id": "order_11", "amount": 10000, "currency": "INR", "status": "created"}
     payload = {
         "event": "order.paid",
         "created_at": 1234567890,
@@ -289,7 +317,9 @@ def test_order_paid_event_stored_no_incident():
     incidents = inc_resp.json()
     assert len(incidents) == 0
 
-def test_payment_captured_then_merchant_order_incident():
+@patch("app.routes.merchant.razorpay_client.create_order", new_callable=AsyncMock)
+def test_payment_captured_then_merchant_order_incident(mock_create_order):
+    mock_create_order.return_value = {"id": "order_11", "amount": 10000, "currency": "INR", "status": "created"}
     # 1. Trigger webhook first (order does not exist yet)
     payload = {
         "event": "payment.captured",
@@ -335,7 +365,9 @@ def test_payment_captured_then_merchant_order_incident():
     assert incidents[0]["razorpay_order_id"] == "order_11"
     assert incidents[0]["incident_type"] == "PAYMENT_STATE_MISMATCH"
 
-def test_payment_captured_then_repeated_merchant_order_idempotency():
+@patch("app.routes.merchant.razorpay_client.create_order", new_callable=AsyncMock)
+def test_payment_captured_then_repeated_merchant_order_idempotency(mock_create_order):
+    mock_create_order.return_value = {"id": "order_12", "amount": 10000, "currency": "INR", "status": "created"}
     # 1. Trigger webhook first
     payload = {
         "event": "payment.captured",

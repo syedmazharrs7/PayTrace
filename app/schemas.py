@@ -42,3 +42,13 @@ class IncidentAnalysisResponse(BaseModel):
     confidence: str
     uncertainty: str
     created_at: str
+
+class AuditTrailResponse(BaseModel):
+    """The schema for an audit trail entry."""
+    id: int
+    incident_id: int
+    action: str
+    reason: str
+    safety_classification: str
+    timestamp: str
+

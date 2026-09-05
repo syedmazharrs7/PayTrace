@@ -66,4 +66,12 @@ class RazorpayClient:
         """Fetch a specific payment from Razorpay"""
         return await self._make_request("GET", f"/payments/{payment_id}")
 
+    async def create_order(self, amount: int, currency: str, receipt: str) -> Dict[str, Any]:
+        """Create a new order in Razorpay"""
+        return await self._make_request("POST", "/orders", json={
+            "amount": amount,
+            "currency": currency,
+            "receipt": receipt
+        })
+
 razorpay_client = RazorpayClient()
